@@ -11,12 +11,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from flask import Flask, Response, g, jsonify, request, send_from_directory, stream_with_context
 
-load_dotenv()
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+
+
+def setting(name, default=""):
+    # Read local edits on each request; environment variables take precedence.
+    return os.getenv(name) or dotenv_values(".env").get(name) or default
+
+
 app = Flask(__name__, static_folder="static")
-app.config.update(MAX_CONTENT_LENGTH=32_768, DATABASE=os.getenv("DATABASE_PATH", "data/threadlight.db"))
+app.config.update(MAX_CONTENT_LENGTH=32_768, DATABASE=setting("DATABASE_PATH", "data/threadlight.db"))
 locks = set()
 lock_guard = threading.Lock()
 
@@ -38,10 +45,13 @@ def db():
         CREATE TABLE IF NOT EXISTS messages (
           id INTEGER PRIMARY KEY, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
           role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
-          sources TEXT NOT NULL DEFAULT '[]');
+          sources TEXT NOT NULL DEFAULT '[]', search_suggestions TEXT NOT NULL DEFAULT '');
         CREATE INDEX IF NOT EXISTS chat_owner ON chats(owner);
         CREATE INDEX IF NOT EXISTS message_chat ON messages(chat_id, id);
         """)
+        if "search_suggestions" not in {row[1] for row in g.db.execute("PRAGMA table_info(messages)")}:
+            g.db.execute("ALTER TABLE messages ADD COLUMN search_suggestions TEXT NOT NULL DEFAULT ''")
+            g.db.commit()
     return g.db
 
 
@@ -71,7 +81,7 @@ def headers(response):
                             secure=request.is_secure, max_age=60 * 60 * 24 * 365)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https://www.gstatic.com; frame-src 'self'; frame-ancestors 'none'"
     if request.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
@@ -107,7 +117,7 @@ def build_input(chat_id, question, tz):
                 memory_size += entry_size
     instructions = f"""You are Threadlight, a concise, accurate personal chat assistant.
 Current server UTC time: {now()}. User timezone: {tz}.
-Your ONLY tool is web_search. Search for current, uncertain, niche, high-stakes, or externally
+Your ONLY tool is Google Search (google_search). Search for current, uncertain, niche, high-stakes, or externally
 verifiable facts. Skip search for writing, stable knowledge, and personal conversation recall.
 Cite factual search-backed claims using the provided URL citations. Prefer primary sources.
 Never invent sources, dates, memories, or claim you searched when you did not. Distinguish fact
@@ -139,7 +149,52 @@ def index():
 
 @app.get("/api/status")
 def status():
-    return jsonify(configured=bool(os.getenv("OPENAI_API_KEY")), model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), tools=["web_search"])
+    return jsonify(configured=bool(setting("GEMINI_API_KEY")), provider="gemini",
+                   model=setting("GEMINI_MODEL", DEFAULT_MODEL), tools=["google_search"])
+
+
+def sse_json(upstream):
+    """Parse SSE data frames, including multi-line JSON and a final unclosed frame."""
+    data = []
+    for line in upstream.iter_lines():
+        if not line:
+            if data:
+                yield json.loads(b"\n".join(data))
+                data = []
+        elif line.startswith(b"data:"):
+            data.append(line[5:].lstrip(b" "))
+    if data:
+        yield json.loads(b"\n".join(data))
+
+
+def grounding_sources(text, metadata):
+    """Map Gemini's UTF-8 byte segments to the UI's Unicode character offsets."""
+    chunks = metadata.get("groundingChunks", [])
+    sources = []
+    encoded = text.encode("utf-8")
+    for support in metadata.get("groundingSupports", []):
+        segment = support.get("segment", {})
+        start, end = segment.get("startIndex", 0), segment.get("endIndex", -1)
+        start_index = end_index = -1
+        if isinstance(start, int) and isinstance(end, int) and 0 <= start < end <= len(encoded):
+            try:
+                start_index = len(encoded[:start].decode("utf-8"))
+                end_index = len(encoded[:end].decode("utf-8"))
+            except UnicodeDecodeError:
+                start_index = end_index = -1
+        for index in support.get("groundingChunkIndices", []):
+            if isinstance(index, int) and 0 <= index < len(chunks):
+                web = chunks[index].get("web", {})
+                if urlparse(web.get("uri", "")).scheme in {"https", "http"}:
+                    sources.append({"url": web["uri"], "title": web.get("title", web["uri"]),
+                                    "start_index": start_index, "end_index": end_index})
+    # Sources remain accessible even when no valid claim-to-source range was supplied.
+    for chunk in chunks:
+        web = chunk.get("web", {})
+        if urlparse(web.get("uri", "")).scheme in {"https", "http"} and not any(s["url"] == web["uri"] for s in sources):
+            sources.append({"url": web["uri"], "title": web.get("title", web["uri"]),
+                            "start_index": -1, "end_index": -1})
+    return sources
 
 
 @app.route("/api/chats", methods=["GET", "POST"])
@@ -189,9 +244,12 @@ def answer():
         return jsonify(error="Conversation not found."), 404
     if not isinstance(tz, str) or len(tz) > 80:
         return jsonify(error="Invalid timezone."), 400
-    key = os.getenv("OPENAI_API_KEY")
+    key = setting("GEMINI_API_KEY")
     if not key:
-        return jsonify(error="Add OPENAI_API_KEY to .env and restart the server to enable replies."), 503
+        return jsonify(error="Add GEMINI_API_KEY to .env to enable replies, then send your message again."), 503
+    model = setting("GEMINI_MODEL", DEFAULT_MODEL)
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", model):
+        return jsonify(error="GEMINI_MODEL must be a valid model ID, such as gemini-3.5-flash-lite."), 503
     owner = g.owner
     with lock_guard:
         if owner in locks:
@@ -214,62 +272,60 @@ def answer():
     @stream_with_context
     def generate():
         started = time.monotonic()
-        sources = []
-        completed = False
+        text_parts = []
+        metadata = {"groundingChunks": [], "groundingSupports": []}
+        suggestions = ""
+        finish_reason = None
         try:
             yield event("status", message="Thinking")
-            with requests.post("https://api.openai.com/v1/responses", headers={
-                "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-                      "instructions": instructions, "input": inputs,
-                      "tools": [{"type": "web_search"}], "tool_choice": "auto",
-                      "max_tool_calls": 3, "max_output_tokens": 2200, "store": False,
-                      "stream": True}, stream=True, timeout=(10, 90)) as upstream:
+            with requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent",
+                params={"alt": "sse"},
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json={"systemInstruction": {"parts": [{"text": instructions}]},
+                      "contents": [{"role": "model" if msg["role"] == "assistant" else "user",
+                                    "parts": [{"text": msg["content"]}]} for msg in inputs],
+                      "tools": [{"google_search": {}}],
+                      "generationConfig": {"maxOutputTokens": 4096, "candidateCount": 1}},
+                stream=True, timeout=(10, 90)) as upstream:
                 if not upstream.ok:
                     yield event("error", message=f"Model service returned HTTP {upstream.status_code}. Check your API key, model access, and quota; your question is saved.")
                     return
-                for line in upstream.iter_lines():
-                    if not line or not line.startswith(b"data: "):
-                        continue
-                    raw = line[6:]
-                    if raw == b"[DONE]":
-                        break
-                    item = json.loads(raw)
-                    kind = item.get("type", "")
-                    if kind == "response.output_text.delta":
-                        yield event("delta", text=item["delta"])
-                    elif kind == "response.web_search_call.searching":
-                        yield event("status", message="Searching the web")
-                    elif kind == "response.completed":
-                        response = item["response"]
-                        text_parts = []
-                        for output in response.get("output", []):
-                            for part in output.get("content", []):
-                                if part.get("type") == "output_text":
-                                    offset = sum(len(p) + 1 for p in text_parts)
-                                    text_parts.append(part.get("text", ""))
-                                    for annotation in part.get("annotations", []):
-                                        if annotation.get("type") == "url_citation" and urlparse(annotation.get("url", "")).scheme in {"https", "http"}:
-                                            source = {"url": annotation["url"], "title": annotation.get("title", annotation["url"]),
-                                                      "start_index": annotation.get("start_index", -1) + offset,
-                                                      "end_index": annotation.get("end_index", -1) + offset}
-                                            if source not in sources:
-                                                sources.append(source)
-                        text = "\n".join(text_parts)
-                        if not text:
-                            yield event("error", message="The model returned no answer. Your question is saved; please try again.")
-                            return
-                        timestamp = now()
-                        db().execute("INSERT INTO messages(chat_id,role,content,created_at,sources) VALUES (?,?,?,?,?)", (chat_id, "assistant", text, timestamp, json.dumps(sources)))
-                        db().commit()
-                        completed = True
-                        yield event("done", text=text, sources=sources, created_at=timestamp, elapsed=round(time.monotonic() - started, 2))
-                    elif kind in {"response.failed", "response.incomplete", "error"}:
+                for item in sse_json(upstream):
+                    if item.get("error") or item.get("promptFeedback", {}).get("blockReason"):
                         yield event("error", message="The model could not complete this reply. Your question is saved; please try again.")
                         return
-                if not completed:
-                    yield event("error", message="The connection ended before completion. Your question is saved.")
-        except (requests.RequestException, ValueError, KeyError):
+                    for candidate in item.get("candidates", []):
+                        if candidate.get("index", 0) != 0:
+                            continue
+                        for part in candidate.get("content", {}).get("parts", []):
+                            if isinstance(part.get("text"), str) and not part.get("thought"):
+                                text_parts.append(part["text"])
+                                yield event("delta", text=part["text"])
+                        grounding = candidate.get("groundingMetadata", {})
+                        for name in ("groundingChunks", "groundingSupports"):
+                            metadata[name].extend(grounding.get(name, []))
+                        suggestions = grounding.get("searchEntryPoint", {}).get("renderedContent") or suggestions
+                        if grounding.get("webSearchQueries"):
+                            yield event("status", message="Web sources received")
+                        finish_reason = candidate.get("finishReason") or finish_reason
+                if finish_reason != "STOP":
+                    message = ("Gemini stopped before completing the reply (output limit or content filter). Your question is saved; please try again."
+                               if finish_reason else "The connection ended before completion. Your question is saved.")
+                    yield event("error", message=message)
+                    return
+                text = "".join(text_parts)
+                if not text.strip():
+                    yield event("error", message="The model returned no answer. Your question is saved; please try again.")
+                    return
+                sources = grounding_sources(text, metadata)
+                timestamp = now()
+                db().execute("INSERT INTO messages(chat_id,role,content,created_at,sources,search_suggestions) VALUES (?,?,?,?,?,?)",
+                             (chat_id, "assistant", text, timestamp, json.dumps(sources), suggestions))
+                db().commit()
+                yield event("done", text=text, sources=sources, search_suggestions=suggestions,
+                            created_at=timestamp, elapsed=round(time.monotonic() - started, 2))
+        except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError):
             yield event("error", message="The model service could not be reached or returned an invalid response. Your question is saved; please try again.")
         finally:
             with lock_guard:
@@ -279,4 +335,4 @@ def answer():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.getenv("PORT", "8000")), threaded=True, debug=False)
+    app.run(host="127.0.0.1", port=int(setting("PORT", "8000")), threaded=True, debug=False)

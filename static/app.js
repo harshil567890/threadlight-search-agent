@@ -9,7 +9,7 @@ async function api(path, options = {}) {
 }
 function notice(text) { $('#notice').textContent = text; $('#notice').hidden = !text; }
 function timeLabel(value) { return new Date(value).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}); }
-function renderMessage(role, text, timestamp, sources = []) {
+function renderMessage(role, text, timestamp, sources = [], suggestions = '') {
   const article = document.createElement('article'); article.className = `message ${role}`;
   const meta = document.createElement('div'); meta.className = 'meta';
   const name = document.createElement('strong'); name.textContent = role === 'user' ? 'You' : '✳ Threadlight';
@@ -17,7 +17,15 @@ function renderMessage(role, text, timestamp, sources = []) {
   meta.append(name, time);
   const content = document.createElement('div'); content.className = 'content'; content.textContent = text;
   article.append(meta, content); $('#messages').append(article);
-  renderContent(content, text, sources); addSources(article, sources); scrollChat(); return article;
+  renderContent(content, text, sources); addSources(article, sources); addSuggestions(article, suggestions); scrollChat(); return article;
+}
+function addSuggestions(article, html) {
+  article.querySelector('.search-suggestions')?.remove();
+  if (!html) return;
+  const frame = document.createElement('iframe'); frame.className = 'search-suggestions';
+  frame.title = 'Google Search suggestions';
+  frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+  frame.referrerPolicy = 'no-referrer'; frame.srcdoc = html; article.append(frame);
 }
 function renderContent(element, text, sources) {
   element.replaceChildren(); const chars = Array.from(text); let cursor = 0;
@@ -57,7 +65,7 @@ async function openChat(id) {
   const data = await api(`/api/chats/${id}`); current = id;
   $('#messages').replaceChildren(); $('#welcome').hidden = data.messages.length > 0;
   $('#delete').hidden = false;
-  data.messages.forEach(m => renderMessage(m.role, m.content, m.created_at, m.sources));
+  data.messages.forEach(m => renderMessage(m.role, m.content, m.created_at, m.sources, m.search_suggestions));
   await refresh(); $('#question').focus();
 }
 async function newChat() {
@@ -103,7 +111,7 @@ $('#composer').onsubmit = async e => {
       if (data.type === 'error') throw new Error(data.message);
       if (data.type === 'done') { completed = true; renderContent(reply.querySelector('.content'),data.text,data.sources);
         const time = reply.querySelector('time'); time.dateTime = data.created_at; time.textContent = `${timeLabel(data.created_at)} · ${data.elapsed}s`;
-        addSources(reply,data.sources); scrollChat();
+        addSources(reply,data.sources); addSuggestions(reply,data.search_suggestions); scrollChat();
       }
     }
     while (true) { const {done,value} = await reader.read(); if (done) break;
@@ -120,7 +128,7 @@ $('#composer').onsubmit = async e => {
 (async () => {
   try {
     const status = await api('/api/status');
-    if (!status.configured) notice('Ready for setup: add OPENAI_API_KEY to .env and restart the server. Your history stays on this device’s server.');
+    if (!status.configured) notice('Ready for setup: add GEMINI_API_KEY to .env, then send a message. Your history stays on this device’s server.');
     const chats = await refresh(); if (chats.length) await openChat(chats[0].id);
   } catch(e) { notice(e.message); }
 })();
