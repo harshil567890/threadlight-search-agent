@@ -76,6 +76,12 @@ This is a **local personal application**, not an authenticated public SaaS. It b
 
 Your chat content and selected history are sent to Google to generate replies; Google's API data-use terms depend on your service tier. Search queries can be sent to the web-search service. SQLite is local and unencrypted. Deletion removes active database rows, not independent backups or previously sent provider data. `.env` and `data/` are ignored by Git.
 
+## Troubleshooting
+
+If Google returns HTTP 403 saying the free tier is unavailable for your project, the key may be valid but generation is disabled for that project's tier. Enable billing in [Google AI Studio](https://aistudio.google.com/billing), or replace `GEMINI_API_KEY` with a key from a project eligible for Gemini API generation. Billing changes may incur charges. Changing the model alone does not resolve a project-level denial. Other 403 errors can indicate key restrictions, a disabled API, or project access restrictions; the app distinguishes known failures without displaying raw provider payloads or credentials.
+
+See Google's [troubleshooting guide](https://ai.google.dev/gemini-api/docs/troubleshooting).
+
 ## Provider reference
 
 Built against the official [Gemini streaming API](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent) and [Google Search grounding guide](https://ai.google.dev/gemini-api/docs/google-search). There is no separate search API key or second model tool.

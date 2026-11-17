@@ -68,7 +68,7 @@ Data is plaintext on the local server; selected history is sent to Google under 
 
 ## Errors and limits
 
-Missing keys yield a setup error without fake replies. Non-success provider HTTP responses, malformed streams, network errors, empty replies, blocked prompts, token-limited completions, and early EOF become explicit errors. Failed questions remain timestamped in history; a retry is a new question with a new time. Browser disconnects release the owner lock as the stream closes; successful completion is not guaranteed after disconnect. After an interrupted answer, the UI removes the partial assistant text and restores the question for retry.
+Missing keys yield a setup error without fake replies. Non-success provider HTTP responses, malformed streams, network errors, empty replies, blocked prompts, token-limited completions, and early EOF become explicit errors. Known Gemini denials are translated into specific remediation for unavailable free tiers, key restrictions, disabled APIs, model availability, and quota limits without echoing raw provider messages or keys. Failed questions remain timestamped in history; a retry is a new question with a new time. Browser disconnects release the owner lock as the stream closes; successful completion is not guaranteed after disconnect. After an interrupted answer, the UI removes the partial assistant text and restores the question for retry.
 
 The Flask development server is for local use. A public service needs authentication, HTTPS, quotas, rate limits, a production WSGI server, shared locks, operational monitoring, retention controls, and backups. Multi-worker operation is not supported by the in-process lock.
 

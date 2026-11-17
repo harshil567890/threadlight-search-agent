@@ -197,6 +197,35 @@ def grounding_sources(text, metadata):
     return sources
 
 
+def provider_error(upstream):
+    """Translate known provider failures without echoing keys or raw error payloads."""
+    try:
+        error = upstream.json().get("error", {})
+        message = str(error.get("message", "")).lower()
+        reasons = {detail.get("reason") for detail in error.get("details", []) if isinstance(detail, dict)}
+    except (ValueError, AttributeError, TypeError):
+        message, reasons = "", set()
+    prefix = f"Gemini returned HTTP {upstream.status_code}. "
+    if upstream.status_code == 403 and "free tier" in message and ("not available" in message or "unavailable" in message):
+        detail = ("Google says the Gemini API free tier is unavailable for this project. "
+                  "Enable billing at https://aistudio.google.com/billing or use a key from an eligible project.")
+    elif "API_KEY_INVALID" in reasons:
+        detail = "Google rejected the API key. Replace GEMINI_API_KEY in .env with a valid Google AI Studio key."
+    elif "SERVICE_DISABLED" in reasons:
+        detail = "Enable the Generative Language API for the Google Cloud project that owns this key."
+    elif reasons & {"API_KEY_SERVICE_BLOCKED", "API_KEY_HTTP_REFERRER_BLOCKED", "API_KEY_IP_ADDRESS_BLOCKED"}:
+        detail = "This key's restrictions block server requests. Check its Gemini API and application restrictions in Google Cloud."
+    elif upstream.status_code == 429:
+        detail = "Google's quota or rate limit was reached. Check your project's Gemini quota and billing, then retry later."
+    elif upstream.status_code == 403:
+        detail = "Google denied this project's access. Check the key restrictions, project eligibility, billing, and model access in Google AI Studio."
+    elif upstream.status_code == 404:
+        detail = "The configured Gemini model is unavailable. Set GEMINI_MODEL in .env to a model available to your project."
+    else:
+        detail = "Check your API key, model access, and provider availability."
+    return prefix + detail + " Your question is saved."
+
+
 @app.route("/api/chats", methods=["GET", "POST"])
 def chats():
     if request.method == "POST":
@@ -289,7 +318,7 @@ def answer():
                       "generationConfig": {"maxOutputTokens": 4096, "candidateCount": 1}},
                 stream=True, timeout=(10, 90)) as upstream:
                 if not upstream.ok:
-                    yield event("error", message=f"Model service returned HTTP {upstream.status_code}. Check your API key, model access, and quota; your question is saved.")
+                    yield event("error", message=provider_error(upstream))
                     return
                 for item in sse_json(upstream):
                     if item.get("error") or item.get("promptFeedback", {}).get("blockReason"):

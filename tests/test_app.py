@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app import app, db, grounding_sources, locks
+from app import app, db, grounding_sources, locks, provider_error
 
 
 class FakeUpstream:
@@ -127,6 +127,23 @@ class AgentTests(unittest.TestCase):
         self.assertIn('HTTP 429', result)
         self.assertNotIn('test-only', result)
         self.assertFalse(locks)
+
+    def test_free_tier_denial_has_specific_safe_remediation(self):
+        upstream = FakeUpstream([])
+        upstream.status_code = 403
+        upstream.json = lambda: {'error': {'message': 'The Gemini API free tier is not available for this project. secret-key-do-not-echo'}}
+        message = provider_error(upstream)
+        self.assertIn('free tier is unavailable', message)
+        self.assertIn('https://aistudio.google.com/billing', message)
+        self.assertNotIn('secret-key-do-not-echo', message)
+
+    def test_key_restriction_denial_is_distinct_from_billing(self):
+        upstream = FakeUpstream([])
+        upstream.status_code = 403
+        upstream.json = lambda: {'error': {'details': [{'reason': 'API_KEY_SERVICE_BLOCKED'}]}}
+        message = provider_error(upstream)
+        self.assertIn('restrictions block server requests', message)
+        self.assertNotIn('Enable billing', message)
 
     @patch.dict(os.environ, {'GEMINI_API_KEY': ''})
     def test_missing_key_does_not_fake_answer(self):
