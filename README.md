@@ -44,7 +44,7 @@ Try: “I prefer Python for backend development.” Then start another chat and 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | none | Server-only API credential |
-| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model supporting Google Search grounding |
+| `GEMINI_MODEL` | `gemini-4-hydrogen` | Gemini model supporting Google Search grounding |
 | `PORT` | `8000` | Local HTTP port |
 | `DATABASE_PATH` | `data/threadlight.db` | SQLite persistence path |
 

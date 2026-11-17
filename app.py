@@ -14,7 +14,7 @@ import requests
 from dotenv import dotenv_values
 from flask import Flask, Response, g, jsonify, request, send_from_directory, stream_with_context
 
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_MODEL = "gemini-4-hydrogen"
 
 
 def setting(name, default=""):
@@ -278,7 +278,7 @@ def answer():
         return jsonify(error="Add GEMINI_API_KEY to .env to enable replies, then send your message again."), 503
     model = setting("GEMINI_MODEL", DEFAULT_MODEL)
     if not re.fullmatch(r"[A-Za-z0-9._-]+", model):
-        return jsonify(error="GEMINI_MODEL must be a valid model ID, such as gemini-3.5-flash-lite."), 503
+        return jsonify(error="GEMINI_MODEL must be a valid model ID, such as gemini-4-hydrogen."), 503
     owner = g.owner
     with lock_guard:
         if owner in locks:

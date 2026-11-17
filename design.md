@@ -44,7 +44,7 @@ The model can call only `google_search`. Gemini decides whether and how often to
 
 ## Speed and accuracy
 
-`gemini-3.5-flash-lite` is a configurable latency/cost-oriented default. Tool choice is automatic: memory questions and writing tasks avoid unnecessary search, while current or uncertain facts should trigger it. This routing is prompted, not a formal guarantee. No redundant model call classifies or summarizes the question. The generated output budget is 4,096 tokens, including any provider thinking budget, and network connect/read timeouts are 10/90 seconds. A read timeout is not an absolute wall-clock deadline.
+`gemini-4-hydrogen` is a configurable latency/cost-oriented default. Tool choice is automatic: memory questions and writing tasks avoid unnecessary search, while current or uncertain facts should trigger it. This routing is prompted, not a formal guarantee. No redundant model call classifies or summarizes the question. The generated output budget is 4,096 tokens, including any provider thinking budget, and network connect/read timeouts are 10/90 seconds. A read timeout is not an absolute wall-clock deadline.
 
 Use primary sources, cite claims, distinguish inference, and acknowledge conflicting evidence. Citation links come from structured Gemini grounding chunks and supports and permit only HTTP(S) URLs. The answer is rendered using safe text nodes, with clickable inline citation spans and source links beneath it, preventing executable model HTML. Gemini's UTF-8 byte offsets are validated and converted to Unicode code-point offsets for the UI. The required provider-generated Search Suggestions HTML is persisted and displayed in a sandboxed iframe with scripts disabled and popups enabled for its links. Inline styles are allowed for this widget; the app itself still disallows inline scripts.
 
@@ -80,4 +80,4 @@ Before claiming production quality, run a versioned live evaluation set with at 
 
 ## Provider references
 
-[Gemini streaming REST API](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent), [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search), and [default model](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite).
+[Gemini streaming REST API](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent), [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search), and [default model](https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen).
